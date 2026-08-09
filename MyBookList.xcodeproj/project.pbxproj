@@ -6,13 +6,8 @@
 	objectVersion = 90;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		ABCA8F34302921A9003C113B /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = ABCA8F2E30290AB0003C113B /* Media.xcassets */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* MyBookList.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyBookList.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		ABCA8F2E30290AB0003C113B /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Media.xcassets; path = MyBookList/Media.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -48,7 +43,6 @@
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				ABCA8F2E30290AB0003C113B /* Media.xcassets */,
 				000000000000000000000010 /* MyBookList */,
 				000000000000000000000020 /* Products */,
 			);
@@ -121,7 +115,6 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				ABCA8F34302921A9003C113B /* Media.xcassets in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */
@@ -280,6 +273,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MyBookList/Info.plist;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -325,6 +319,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MyBookList/Info.plist;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
