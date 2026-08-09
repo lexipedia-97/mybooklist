@@ -6,10 +6,6 @@
 	objectVersion = 90;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		ABCA8F2F30290AB0003C113B /* Media.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = ABCA8F2E30290AB0003C113B /* Media.xcassets */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* MyBookList.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyBookList.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		ABCA8F2E30290AB0003C113B /* Media.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Media.xcassets; path = MyBookList/Media.xcassets; sourceTree = "<group>"; };
@@ -108,7 +104,6 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				ABCA8F2F30290AB0003C113B /* Media.xcassets in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */
