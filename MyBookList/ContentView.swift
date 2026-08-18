@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import UserNotifications
 
 private let googleBooksAPIKey = "AIzaSyCpjQE9c-O_U8EcBmUTSw-0Pkh4szAumeY"
 
@@ -27,7 +28,66 @@ struct ContentView: View {
         }
     }
 
+    private var loanedEntries: [ReadingEntry] {
+        sortedEntries.filter(\.isLoaned)
+    }
+
     var body: some View {
+        TabView {
+            libraryView
+                .tabItem {
+                    Label("Biblioteca", systemImage: "books.vertical")
+                }
+
+            loanedBooksView
+                .tabItem {
+                    Label("Emprestados", systemImage: "person.crop.circle.badge.clock")
+                }
+        }
+        .overlay(alignment: .bottom) {
+            if let message {
+                Text(message)
+                    .font(.footnote)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding()
+            }
+        }
+        .task {
+            readingStore.synchronizeCloudStore()
+            loadSavedEntries()
+            await observeCloudChanges()
+        }
+        .sheet(isPresented: $isShowingSearch) {
+            BookSearchView(savedEntries: savedEntries) { entry in
+                save(entry, showsSuccessMessage: true)
+            }
+        }
+        .sheet(item: $selectedEntry) { entry in
+            BookDetailView(book: entry.book, initialEntry: entry, saveButtonTitle: "Salvar") { updatedEntry in
+                save(updatedEntry, showsSuccessMessage: true)
+            }
+        }
+        .confirmationDialog(
+            "Excluir livro da lista?",
+            isPresented: $isConfirmingDeletion,
+            titleVisibility: .visible,
+            presenting: entryPendingDeletion
+        ) { entry in
+            Button("Excluir \"\(entry.title)\"", role: .destructive) {
+                confirmDeletion(of: entry)
+            }
+
+            Button("Cancelar", role: .cancel) {
+                entryPendingDeletion = nil
+            }
+        } message: { _ in
+            Text("Esta acao remove o livro e sua opiniao deste dispositivo.")
+        }
+    }
+
+    private var libraryView: some View {
         NavigationStack {
             List {
                 if sortedEntries.isEmpty {
@@ -42,22 +102,7 @@ struct ContentView: View {
                         .buttonStyle(.borderedProminent)
                     }
                 } else {
-                    ForEach(sortedEntries) { entry in
-                        Button {
-                            selectedEntry = entry
-                        } label: {
-                            ReadingEntryRow(entry: entry)
-                        }
-                        .buttonStyle(.plain)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) {
-                                entryPendingDeletion = entry
-                                isConfirmingDeletion = true
-                            } label: {
-                                Label("Excluir", systemImage: "trash")
-                            }
-                        }
-                    }
+                    entryRows(for: sortedEntries)
                 }
             }
             .navigationTitle("Minha Leitura")
@@ -70,47 +115,47 @@ struct ContentView: View {
                     }
                 }
             }
-            .overlay(alignment: .bottom) {
-                if let message {
-                    Text(message)
-                        .font(.footnote)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(.thinMaterial, in: Capsule())
-                        .padding()
-                }
-            }
-            .task {
-                loadSavedEntries()
-            }
             .refreshable {
                 loadSavedEntries()
             }
-            .sheet(isPresented: $isShowingSearch) {
-                BookSearchView(savedEntries: savedEntries) { entry in
-                    save(entry, showsSuccessMessage: true)
-                }
-            }
-            .sheet(item: $selectedEntry) { entry in
-                BookDetailView(book: entry.book, initialEntry: entry, saveButtonTitle: "Salvar") { updatedEntry in
-                    save(updatedEntry, showsSuccessMessage: true)
-                }
-            }
-            .confirmationDialog(
-                "Excluir livro da lista?",
-                isPresented: $isConfirmingDeletion,
-                titleVisibility: .visible,
-                presenting: entryPendingDeletion
-            ) { entry in
-                Button("Excluir \"\(entry.title)\"", role: .destructive) {
-                    confirmDeletion(of: entry)
-                }
+        }
+    }
 
-                Button("Cancelar", role: .cancel) {
-                    entryPendingDeletion = nil
+    private var loanedBooksView: some View {
+        NavigationStack {
+            List {
+                if loanedEntries.isEmpty {
+                    ContentUnavailableView {
+                        Label("Nenhum emprestimo", systemImage: "person.crop.circle.badge.clock")
+                    } description: {
+                        Text("Marque um livro como emprestado para acompanhar com quem ele esta.")
+                    }
+                } else {
+                    entryRows(for: loanedEntries)
                 }
-            } message: { _ in
-                Text("Esta acao remove o livro e sua opiniao deste dispositivo.")
+            }
+            .navigationTitle("Emprestados")
+            .refreshable {
+                loadSavedEntries()
+            }
+        }
+    }
+
+    private func entryRows(for entries: [ReadingEntry]) -> some View {
+        ForEach(entries) { entry in
+            Button {
+                selectedEntry = entry
+            } label: {
+                ReadingEntryRow(entry: entry)
+            }
+            .buttonStyle(.plain)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    entryPendingDeletion = entry
+                    isConfirmingDeletion = true
+                } label: {
+                    Label("Excluir", systemImage: "trash")
+                }
             }
         }
     }
@@ -122,6 +167,7 @@ struct ContentView: View {
     private func save(_ entry: ReadingEntry, showsSuccessMessage: Bool) {
         savedEntries[entry.bookID] = entry
         readingStore.saveEntries(savedEntries)
+        scheduleLoanReminder(for: entry)
 
         if showsSuccessMessage {
             Task {
@@ -131,8 +177,8 @@ struct ContentView: View {
     }
 
     private func confirmDeletion(of entry: ReadingEntry) {
-        savedEntries.removeValue(forKey: entry.bookID)
-        readingStore.saveEntries(savedEntries)
+        savedEntries = readingStore.deleteEntry(entry, from: savedEntries)
+        LoanReminderScheduler.cancelReminder(for: entry)
         entryPendingDeletion = nil
         selectedEntry = nil
 
@@ -146,6 +192,27 @@ struct ContentView: View {
         try? await Task.sleep(for: .seconds(2))
         if !Task.isCancelled {
             message = nil
+        }
+    }
+
+    private func observeCloudChanges() async {
+        let notifications = NotificationCenter.default.notifications(
+            named: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: nil
+        )
+
+        for await notification in notifications where readingStore.shouldReloadAfterCloudChange(notification) {
+            loadSavedEntries()
+        }
+    }
+
+    private func scheduleLoanReminder(for entry: ReadingEntry) {
+        Task {
+            do {
+                try await LoanReminderScheduler.updateReminder(for: entry)
+            } catch {
+                await showTemporaryMessage("Nao foi possivel agendar o alerta.")
+            }
         }
     }
 }
@@ -279,6 +346,39 @@ struct ReadingEntryRow: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(entry.status.tint)
 
+                if let category = entry.category {
+                    Label(category.rawValue, systemImage: category.systemImage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if entry.status == .abandoned {
+                    if let lastPageRead = entry.lastPageRead {
+                        Label("Parou na pagina \(lastPageRead)", systemImage: "bookmark")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let abandonmentReason = entry.abandonmentReason {
+                        Text(abandonmentReason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                if let borrowerName = entry.borrowerName, let loanDate = entry.loanDate {
+                    Label("Emprestado para \(borrowerName) em \(loanDate.formatted(date: .abbreviated, time: .omitted))", systemImage: "person.fill")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                }
+
+                if let reminderDate = entry.returnReminderDate {
+                    Label("Cobrar em \(reminderDate.formatted(date: .abbreviated, time: .omitted))", systemImage: "bell")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if !entry.opinion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(entry.opinion)
                         .font(.caption)
@@ -344,7 +444,14 @@ struct BookDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var status: ReadingStatus
+    @State private var category: BookCategory
     @State private var opinion: String
+    @State private var isLoaned: Bool
+    @State private var borrowerName: String
+    @State private var loanDate: Date
+    @State private var reminderOption: LoanReminderOption
+    @State private var lastPageReadText: String
+    @State private var abandonmentReason: String
     @State private var isSaving = false
 
     init(book: Book, initialEntry: ReadingEntry?, saveButtonTitle: String, onSave: @escaping (ReadingEntry) -> Void) {
@@ -352,7 +459,14 @@ struct BookDetailView: View {
         self.saveButtonTitle = saveButtonTitle
         self.onSave = onSave
         _status = State(initialValue: initialEntry?.status ?? .pending)
+        _category = State(initialValue: initialEntry?.category ?? .history)
         _opinion = State(initialValue: initialEntry?.opinion ?? "")
+        _isLoaned = State(initialValue: initialEntry?.isLoaned ?? false)
+        _borrowerName = State(initialValue: initialEntry?.borrowerName ?? "")
+        _loanDate = State(initialValue: initialEntry?.loanDate ?? Date())
+        _reminderOption = State(initialValue: LoanReminderOption.matching(loanDate: initialEntry?.loanDate, reminderDate: initialEntry?.returnReminderDate))
+        _lastPageReadText = State(initialValue: initialEntry?.lastPageRead.map(String.init) ?? "")
+        _abandonmentReason = State(initialValue: initialEntry?.abandonmentReason ?? "")
     }
 
     var body: some View {
@@ -390,6 +504,43 @@ struct BookDetailView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                }
+
+                Section("Classificacao") {
+                    Picker("Tipo de livro", selection: $category) {
+                        ForEach(BookCategory.allCases) { category in
+                            Label(category.rawValue, systemImage: category.systemImage)
+                                .tag(category)
+                        }
+                    }
+                }
+
+                if status == .abandoned {
+                    Section("Abandono") {
+                        TextField("Ultima pagina lida", text: $lastPageReadText)
+                            .keyboardType(.numberPad)
+
+                        TextField("Motivo do abandono", text: $abandonmentReason, axis: .vertical)
+                            .lineLimit(3...8)
+                    }
+                }
+
+                Section("Emprestimo") {
+                    Toggle("Emprestado", isOn: $isLoaned)
+
+                    if isLoaned {
+                        TextField("Nome da pessoa", text: $borrowerName)
+                            .textContentType(.name)
+
+                        DatePicker("Data do emprestimo", selection: $loanDate, displayedComponents: .date)
+
+                        Picker("Alerta de devolucao", selection: $reminderOption) {
+                            ForEach(LoanReminderOption.allCases) { option in
+                                Text(option.title)
+                                    .tag(option)
+                            }
+                        }
+                    }
                 }
 
                 Section("Opiniao") {
@@ -432,9 +583,33 @@ struct BookDetailView: View {
             publishedYear: book.publishedYear,
             thumbnailURL: book.thumbnailURL,
             status: status,
+            category: category,
             opinion: opinion,
+            lastPageRead: status == .abandoned ? sanitizedLastPageRead : nil,
+            abandonmentReason: status == .abandoned ? sanitizedAbandonmentReason : nil,
+            borrowerName: sanitizedBorrowerName,
+            loanDate: isLoaned ? loanDate : nil,
+            returnReminderDate: isLoaned ? reminderOption.reminderDate(from: loanDate) : nil,
             updatedAt: Date()
         )
+    }
+
+    private var sanitizedBorrowerName: String? {
+        guard isLoaned else { return nil }
+
+        let name = borrowerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    private var sanitizedLastPageRead: Int? {
+        let digits = lastPageReadText.filter(\.isNumber)
+        guard let page = Int(digits), page > 0 else { return nil }
+        return page
+    }
+
+    private var sanitizedAbandonmentReason: String? {
+        let reason = abandonmentReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return reason.isEmpty ? nil : reason
     }
 }
 
@@ -508,6 +683,59 @@ enum ReadingStatus: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum BookCategory: String, CaseIterable, Identifiable, Codable {
+    case history = "Historia"
+    case technical = "Livro tecnico"
+    case bibliography = "Bibliografia"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .history: "building.columns"
+        case .technical: "laptopcomputer"
+        case .bibliography: "text.book.closed"
+        }
+    }
+}
+
+enum LoanReminderOption: Int, CaseIterable, Identifiable {
+    case none = 0
+    case sevenDays = 7
+    case fifteenDays = 15
+    case thirtyDays = 30
+    case sixtyDays = 60
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: "Sem alerta"
+        case .sevenDays: "Lembrar em 7 dias"
+        case .fifteenDays: "Lembrar em 15 dias"
+        case .thirtyDays: "Lembrar em 30 dias"
+        case .sixtyDays: "Lembrar em 60 dias"
+        }
+    }
+
+    func reminderDate(from loanDate: Date) -> Date? {
+        guard self != .none else { return nil }
+        return Calendar.current.date(byAdding: .day, value: rawValue, to: loanDate)
+    }
+
+    static func matching(loanDate: Date?, reminderDate: Date?) -> LoanReminderOption {
+        guard
+            let loanDate,
+            let reminderDate,
+            let dayCount = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: loanDate), to: Calendar.current.startOfDay(for: reminderDate)).day
+        else {
+            return .none
+        }
+
+        return LoanReminderOption(rawValue: dayCount) ?? .none
+    }
+}
+
 struct ReadingEntry: Identifiable, Hashable, Codable {
     var id: String { bookID }
     let bookID: String
@@ -516,8 +744,59 @@ struct ReadingEntry: Identifiable, Hashable, Codable {
     let publishedYear: String?
     let thumbnailURL: URL?
     var status: ReadingStatus
+    var category: BookCategory?
     var opinion: String
+    var lastPageRead: Int?
+    var abandonmentReason: String?
+    var borrowerName: String?
+    var loanDate: Date?
+    var returnReminderDate: Date?
     var updatedAt: Date
+
+    var isLoaned: Bool {
+        guard let borrowerName else { return false }
+        return !borrowerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+enum LoanReminderScheduler {
+    static func updateReminder(for entry: ReadingEntry) async throws {
+        cancelReminder(for: entry)
+
+        guard
+            entry.isLoaned,
+            let borrowerName = entry.borrowerName,
+            let reminderDate = entry.returnReminderDate,
+            reminderDate > Date()
+        else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+
+        guard granted else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Cobrar livro emprestado"
+        content.body = "Lembre \(borrowerName) de devolver \(entry.title)."
+        content.sound = .default
+
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: reminderDate)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        let request = UNNotificationRequest(identifier: reminderIdentifier(for: entry), content: content, trigger: trigger)
+
+        try await center.add(request)
+    }
+
+    static func cancelReminder(for entry: ReadingEntry) {
+        let identifier = reminderIdentifier(for: entry)
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+    }
+
+    private static func reminderIdentifier(for entry: ReadingEntry) -> String {
+        "loan-return-\(entry.bookID)"
+    }
 }
 
 struct GoogleBooksService {
@@ -544,30 +823,125 @@ struct GoogleBooksService {
 
 struct ReadingLocalStore {
     private let storageKey = "readingEntries"
+    private let deletedStorageKey = "deletedReadingEntries"
+    private let cloudStore = NSUbiquitousKeyValueStore.default
+
+    func synchronizeCloudStore() {
+        cloudStore.synchronize()
+    }
 
     func fetchEntries() -> [String: ReadingEntry] {
-        guard let data = UserDefaults.standard.data(forKey: storageKey) else {
-            return [:]
+        let localEntries = decodeEntries(from: UserDefaults.standard.data(forKey: storageKey))
+        let cloudEntries = decodeEntries(from: cloudStore.data(forKey: storageKey))
+        let tombstones = mergedTombstones()
+        var mergedEntries = merge(localEntries, cloudEntries)
+
+        for (bookID, deletedAt) in tombstones {
+            if let entry = mergedEntries[bookID], entry.updatedAt <= deletedAt {
+                mergedEntries.removeValue(forKey: bookID)
+            }
         }
+
+        persist(entries: mergedEntries)
+        persist(tombstones: tombstones)
+        return mergedEntries
+    }
+
+    func saveEntries(_ entries: [String: ReadingEntry]) {
+        var tombstones = mergedTombstones()
+
+        for bookID in entries.keys {
+            tombstones.removeValue(forKey: bookID)
+        }
+
+        persist(entries: entries)
+        persist(tombstones: tombstones)
+    }
+
+    func deleteEntry(_ entry: ReadingEntry, from entries: [String: ReadingEntry]) -> [String: ReadingEntry] {
+        var updatedEntries = entries
+        updatedEntries.removeValue(forKey: entry.bookID)
+
+        var tombstones = mergedTombstones()
+        tombstones[entry.bookID] = Date()
+
+        persist(entries: updatedEntries)
+        persist(tombstones: tombstones)
+        return updatedEntries
+    }
+
+    func shouldReloadAfterCloudChange(_ notification: Notification) -> Bool {
+        guard let changedKeys = notification.userInfo?[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] else {
+            return true
+        }
+
+        return changedKeys.contains(storageKey) || changedKeys.contains(deletedStorageKey)
+    }
+
+    private func decodeEntries(from data: Data?) -> [String: ReadingEntry] {
+        guard let data else { return [:] }
 
         do {
             let entries = try JSONDecoder().decode([ReadingEntry].self, from: data)
             return Dictionary(uniqueKeysWithValues: entries.map { ($0.bookID, $0) })
         } catch {
-            UserDefaults.standard.removeObject(forKey: storageKey)
             return [:]
         }
     }
 
-    func saveEntries(_ entries: [String: ReadingEntry]) {
+    private func decodeTombstones(from data: Data?) -> [String: Date] {
+        guard let data else { return [:] }
+
+        do {
+            return try JSONDecoder().decode([String: Date].self, from: data)
+        } catch {
+            return [:]
+        }
+    }
+
+    private func mergedTombstones() -> [String: Date] {
+        var tombstones = decodeTombstones(from: UserDefaults.standard.data(forKey: deletedStorageKey))
+        let cloudTombstones = decodeTombstones(from: cloudStore.data(forKey: deletedStorageKey))
+
+        for (bookID, deletedAt) in cloudTombstones where deletedAt > tombstones[bookID, default: .distantPast] {
+            tombstones[bookID] = deletedAt
+        }
+
+        return tombstones
+    }
+
+    private func merge(_ first: [String: ReadingEntry], _ second: [String: ReadingEntry]) -> [String: ReadingEntry] {
+        var mergedEntries = first
+
+        for (bookID, entry) in second where entry.updatedAt > mergedEntries[bookID]?.updatedAt ?? .distantPast {
+            mergedEntries[bookID] = entry
+        }
+
+        return mergedEntries
+    }
+
+    private func persist(entries: [String: ReadingEntry]) {
         do {
             let sortedEntries = entries.values.sorted { first, second in
                 first.title.localizedCaseInsensitiveCompare(second.title) == .orderedAscending
             }
             let data = try JSONEncoder().encode(sortedEntries)
             UserDefaults.standard.set(data, forKey: storageKey)
+            cloudStore.set(data, forKey: storageKey)
+            cloudStore.synchronize()
         } catch {
             assertionFailure("Could not save reading entries locally: \(error.localizedDescription)")
+        }
+    }
+
+    private func persist(tombstones: [String: Date]) {
+        do {
+            let data = try JSONEncoder().encode(tombstones)
+            UserDefaults.standard.set(data, forKey: deletedStorageKey)
+            cloudStore.set(data, forKey: deletedStorageKey)
+            cloudStore.synchronize()
+        } catch {
+            assertionFailure("Could not save deleted reading entries locally: \(error.localizedDescription)")
         }
     }
 }
@@ -633,4 +1007,3 @@ struct ImageLinks: Decodable {
 #Preview {
     ContentView()
 }
-
